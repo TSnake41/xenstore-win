@@ -1,0 +1,30 @@
+[package]
+name = "xenstore-win"
+version = "0.1.0"
+edition = "2021"
+description = "Xenstore implementation for Windows"
+authors = ["Teddy Astie <teddy.astie@vates.tech>"]
+keywords = ["xen", "xenstore", "windows"]
+categories = ["api-bindings"]
+license = "GPL-3.0-only"
+
+[dependencies]
+log = "0.4"
+
+[dependencies.windows]
+version = "0.58"
+features = [
+  "Win32_System_IO",
+  "Win32_Storage_FileSystem",
+  "Win32_Security",
+  "Win32_Devices_DeviceAndDriverInstallation",
+]
+
+[dependencies.xenstore-rs]
+git = "https://github.com/TSnake41/xenstore-rs.git"
+branch = "pure-rust"
+default-features = false
+features = []
+
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }
