@@ -195,3 +195,5 @@ impl Xs for XsWindows {
         Ok(())
     }
 }
+
+unsafe impl Send for XsWindows {}
