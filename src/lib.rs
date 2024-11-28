@@ -109,7 +109,7 @@ impl Drop for XsWindows {
 }
 
 impl Xs for XsWindows {
-    fn directory(&mut self, path: &str) -> io::Result<Vec<Box<str>>> {
+    fn directory(&self, path: &str) -> io::Result<Vec<Box<str>>> {
         let in_buffer = make_payload(&[path]);
         let mut out_buffer = vec![0u8; 4096];
 
@@ -134,7 +134,7 @@ impl Xs for XsWindows {
             .collect())
     }
 
-    fn read(&mut self, path: &str) -> io::Result<Box<str>> {
+    fn read(&self, path: &str) -> io::Result<Box<str>> {
         let in_buffer = make_payload(&[path]);
         let mut out_buffer = vec![0u8; 4096];
 
@@ -158,7 +158,7 @@ impl Xs for XsWindows {
             .into_boxed_str())
     }
 
-    fn write(&mut self, path: &str, data: &str) -> io::Result<()> {
+    fn write(&self, path: &str, data: &str) -> io::Result<()> {
         let in_buffer = make_payload(&[path, data]);
 
         /* Write a value to XenStore
@@ -177,7 +177,7 @@ impl Xs for XsWindows {
         Ok(())
     }
 
-    fn rm(&mut self, path: &str) -> io::Result<()> {
+    fn rm(&self, path: &str) -> io::Result<()> {
         let in_buffer = make_payload(&[path]);
 
         /* Remove a key from XenStore
