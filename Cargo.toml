@@ -21,9 +21,7 @@ features = [
 ]
 
 [dependencies.xenstore-rs]
-git = "https://github.com/TSnake41/xenstore-rs.git"
-branch = "pure-rust"
-default-features = false
+version = "0.8"
 features = []
 
 [dev-dependencies]
