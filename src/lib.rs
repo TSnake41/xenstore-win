@@ -4,23 +4,29 @@
 mod device;
 mod utils;
 
-use core::str;
-use std::io;
+#[cfg(feature = "smol")]
+pub mod smol;
+
+use std::{
+    ffi::{CString, c_void},
+    io,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
+};
 
 use device::{DeviceInfoList, GUID_INTERFACE_XENIFACE};
 use utils::{make_payload, parse_nul_list, parse_nul_string};
 
 use log::{debug, warn};
 use windows::{
-    core::{Result, PCWSTR},
     Win32::{
-        Foundation::{CloseHandle, ERROR_NOT_FOUND, GENERIC_READ, GENERIC_WRITE, HANDLE},
+        Foundation::{ERROR_NOT_FOUND, GENERIC_READ, GENERIC_WRITE, HANDLE},
         Storage::FileSystem::{
             CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
             OPEN_EXISTING,
         },
-        System::IO::DeviceIoControl,
+        System::{IO::DeviceIoControl, Threading::CreateEventW},
     },
+    core::{PCWSTR, Result},
 };
 use xenstore_rs::Xs;
 
@@ -36,7 +42,7 @@ const FILE_ANY_ACCESS: u32 = 0;
 const FILE_DEVICE_UNKNOWN: u32 = 0x22;
 
 /// Xenstore Windows implementation.
-pub struct XsWindows(HANDLE);
+pub struct XsWindows(OwnedHandle);
 
 impl XsWindows {
     /// Try to open Xenstore interface.
@@ -62,8 +68,8 @@ impl XsWindows {
                 )
             } {
                 Ok(file) => {
-                    debug!("Got {:?}", file);
-                    return Ok(XsWindows(file));
+                    debug!("Got {file:?}");
+                    return Ok(XsWindows(unsafe { OwnedHandle::from_raw_handle(file.0) }));
                 }
                 Err(e) => {
                     warn!("Unable to open {} ({e})", unsafe { wpath.display() })
@@ -85,7 +91,7 @@ impl XsWindows {
 
         unsafe {
             DeviceIoControl(
-                self.0,
+                HANDLE(self.0.as_raw_handle()),
                 control_code,
                 Some(in_buffer.as_ptr().cast()),
                 in_buffer.len() as u32,
@@ -97,14 +103,6 @@ impl XsWindows {
         }
 
         Ok(len)
-    }
-}
-
-impl Drop for XsWindows {
-    fn drop(&mut self) {
-        if let Err(e) = unsafe { CloseHandle(self.0) } {
-            warn!("CloseHandle failure ({e})");
-        }
     }
 }
 
@@ -196,4 +194,66 @@ impl Xs for XsWindows {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WatchContext([u8; size_of::<*mut c_void>()]);
+
+impl XsWindows {
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self(self.0.try_clone()?))
+    }
+
+    pub(crate) fn make_watch(&self, path: &str) -> io::Result<(OwnedHandle, WatchContext)> {
+        /* Add a XenStore watch
+         * Input: XENIFACE_STORE_ADD_WATCH_IN
+         * Output: XENIFACE_STORE_ADD_WATCH_OUT (PVOID)
+         * #define IOCTL_XENIFACE_STORE_ADD_WATCH \
+         *     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+         */
+        let c_path = CString::new(path)?;
+        let event =
+            unsafe { OwnedHandle::from_raw_handle(CreateEventW(None, true, false, None)?.0) };
+
+        /*
+         * typedef struct _XENIFACE_STORE_ADD_WATCH_IN {
+         *     PCHAR  Path;       /*!< NUL-terminated path to a XenStore key */
+         *     ULONG  PathLength; /*!< Size of Path in bytes, including the NUL terminator */
+         *     HANDLE Event;      /*!< Handle to an event object that will be signaled when the watch fires */
+         * } XENIFACE_STORE_ADD_WATCH_IN, *PXENIFACE_STORE_ADD_WATCH_IN;
+         */
+        // TODO: Not sure if it would be preferable to use a repr(C) struct.
+        let watch_in_bytes = [
+            c_path.as_ptr().addr().to_ne_bytes(),
+            c_path.as_bytes_with_nul().len().to_ne_bytes(),
+            event.as_raw_handle().addr().to_ne_bytes(),
+        ];
+        let mut context = WatchContext::default();
+
+        self.make_ioctl(
+            ctl_code(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS),
+            watch_in_bytes.as_flattened(),
+            Some(context.0.as_mut_slice()),
+        )?;
+
+        Ok((event, context))
+    }
+
+    pub(crate) fn destroy_watch(&self, context: WatchContext) -> io::Result<()> {
+        /*
+         * Remove a XenStore watch
+         * Input: XENIFACE_STORE_REMOVE_WATCH_IN (PVOID)
+         * Output: None
+         * #define IOCTL_XENIFACE_STORE_REMOVE_WATCH (PVOID)
+         *     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+         */
+        self.make_ioctl(
+            ctl_code(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS),
+            &context.0,
+            None,
+        )?;
+
+        Ok(())
+    }
+}
+
 unsafe impl Send for XsWindows {}
+unsafe impl Sync for XsWindows {}
